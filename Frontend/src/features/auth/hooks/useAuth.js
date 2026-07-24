@@ -62,7 +62,7 @@ export const useAuth = () => {
       }
     };
     getAndSetUser();
-  });
+  },[]);
 
   return {
     user,

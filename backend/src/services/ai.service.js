@@ -1,10 +1,11 @@
-const {GoogleGenAI} = require("@google/genai");
-const {z} = require("zod")
-const {zodToJsonSchema} = require("zod-to-json-schema")
+const { GoogleGenAI } = require("@google/genai")
+const { z } = require("zod")
+const puppeteer = require("puppeteer")
 
 const ai = new GoogleGenAI({
     apiKey: process.env.GOOGLE_GENAI_API_KEY
 })
+
 
 const interviewReportSchema = z.object({
     matchScore: z.number().describe("A score between 0 and 100 indicating how well the candidate's profile matches the job describe"),
@@ -27,24 +28,106 @@ const interviewReportSchema = z.object({
         focus: z.string().describe("The main focus of this day in the preparation plan, e.g. data structures, system design, mock interviews etc."),
         tasks: z.array(z.string()).describe("List of tasks to be done on this day to follow the preparation plan, e.g. read a specific book or article, solve a set of problems, watch a video etc.")
     })).describe("A day-wise preparation plan for the candidate to follow in order to prepare for the interview effectively"),
-    title: z.string().describe("The title of the job for which the interview report is generated"),
+    title: z.string().describe(
+    "Exact job title from the job description, for example 'Software Engineer Intern', 'Full Stack Developer', 'Backend Engineer'."
+)
 })
 
-async function generateInterviewReport({resume, selfDescription, jobDescription}){
+async function generateInterviewReport({ resume, selfDescription, jobDescription }) {
+
 
     const prompt = `Generate an interview report for a candidate with the following details:
                         Resume: ${resume}
                         Self Description: ${selfDescription}
-                        Job Description: ${jobDescription} `
+                        Job Description: ${jobDescription}
+`
+
     const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
+        model: "gemini-3-flash-preview",
         contents: prompt,
         config: {
             responseMimeType: "application/json",
-            responseSchema: zodToJsonSchema(interviewReportSchema),
+            responseSchema: z.toJSONSchema(interviewReportSchema),
         }
     })
-    return JSON.parse(response.text)
+    console.log(response.text);
+    console.log(JSON.parse(response.text));
+
+    const report = JSON.parse(response.text);
+
+    return interviewReportSchema.parse(report);
+
+
 }
 
-module.exports = generateInterviewReport;
+
+
+async function generatePdfFromHtml(htmlContent) {
+    const browser = await puppeteer.launch()
+    const page = await browser.newPage();
+    await page.setContent(htmlContent, { waitUntil: "networkidle0" })
+
+    const pdfBuffer = await page.pdf({
+        format: "A4", margin: {
+            top: "20mm",
+            bottom: "20mm",
+            left: "15mm",
+            right: "15mm"
+        }
+    })
+
+    await browser.close()
+
+    return pdfBuffer
+}
+
+async function generateResumePdf({ resume, selfDescription, jobDescription }) {
+
+    const resumePdfSchema = z.object({
+        html: z.string().describe("The HTML content of the resume which can be converted to PDF using any library like puppeteer")
+    })
+
+    const prompt = `
+    You are an expert technical interviewer and career coach.
+
+    Analyze the candidate's resume, self description, and the job description.
+
+    Return ONLY a valid JSON object that strictly follows the provided JSON schema.
+
+    Requirements:
+    - title: Job title for which this interview report is generated.
+    - matchScore: Integer between 0 and 100.
+    - technicalQuestions: At least 5 technical interview questions.
+    - behavioralQuestions: At least 5 behavioral interview questions.
+    - skillGaps: List every missing skill with severity (low, medium, high).
+    - preparationPlan: Create a complete 30-day preparation plan.
+
+    Resume:
+    ${resume}
+
+    Self Description:
+    ${selfDescription}
+
+    Job Description:
+    ${jobDescription}
+    `;
+
+    const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: {
+            responseMimeType: "application/json",
+            responseSchema: zodToJsonSchema(resumePdfSchema),
+        }
+    })
+
+
+    const jsonContent = JSON.parse(response.text)
+
+    const pdfBuffer = await generatePdfFromHtml(jsonContent.html)
+
+    return pdfBuffer
+
+}
+
+module.exports = { generateInterviewReport, generateResumePdf }
